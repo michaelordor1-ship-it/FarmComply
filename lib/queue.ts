@@ -2,6 +2,8 @@
 
 export type QueuedClip = {
   clipId: string;
+  batchId: string;
+  batchName: string;
   blob: Blob;
   mimeType: string;
   deviceRecordedAt: number;
@@ -57,6 +59,7 @@ export async function flushQueue(onProgress?: (msg: string) => void): Promise<nu
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             clipId: clip.clipId,
+            batchId: clip.batchId,
             deviceRecordedAt: clip.deviceRecordedAt,
             deviceNow: Date.now(),
             clockTicket: clip.clockTicket,

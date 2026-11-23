@@ -18,7 +18,11 @@ export async function POST(req: Request) {
   if (!clipId || deviceRecordedAt === null || deviceNow === null)
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
 
+  const batchId = typeof b?.batchId === "string" ? b.batchId : null;
   const supa = db();
+  if (!batchId) return NextResponse.json({ error: "Choose a batch before recording." }, { status: 400 });
+  const { data: batch } = await supa.from("batches").select("id").eq("id", batchId).maybeSingle();
+  if (!batch) return NextResponse.json({ error: "That batch no longer exists. Ask your admin." }, { status: 400 });
 
   // Retried upload of a clip we already know about
   const { data: existing } = await supa
@@ -66,6 +70,7 @@ export async function POST(req: Request) {
   const row = {
     staff_id: s.staffId,
     device_id: s.deviceId,
+    batch_id: batchId,
     client_clip_id: clipId,
     status: "pending",
     storage_path: path,

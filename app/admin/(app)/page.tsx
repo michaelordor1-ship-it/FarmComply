@@ -1,64 +1,96 @@
-import { fetchRecordings, fetchStaff, signedVideoUrls, toInputs } from "@/lib/data";
+import Link from "next/link";
+import { batchesOverlapping, fetchBatches, fetchRecordings, fetchSchedules, signedVideoUrls, toInputs } from "@/lib/data";
 import { computeReport, FLAG_LABELS } from "@/lib/report";
 import { addDays, assignSlot, formatDayLong, formatDeviation, formatLocalTime, localDateKey } from "@/lib/time";
 
 export default async function Today() {
   const today = localDateKey(new Date());
+  const yesterday = addDays(today, -1);
   const from = addDays(today, -6);
-  const [rows, staff] = await Promise.all([fetchRecordings(from, today), fetchStaff()]);
+  const [rows, schedules, allBatches] = await Promise.all([fetchRecordings(from, today), fetchSchedules(), fetchBatches(true)]);
   const urls = await signedVideoUrls(rows.map((r) => r.storage_path));
-  const r = computeReport({ from, to: today, recordings: toInputs(rows, urls), staff });
-  const recent = [...r.days].reverse().slice(0, 2);
-  const byId = new Map(rows.map((x) => [x.id, x]));
+  const batches = batchesOverlapping(allBatches, yesterday, today);
   const list = [...rows].reverse();
 
   return (
     <main>
-      <h1>Today</h1>
-      {recent.map((d) => (
-        <section key={d.dateKey} className="card">
-          <h2>{d.dateKey === today ? "Today" : "Yesterday"} · {formatDayLong(d.dateKey)}</h2>
-          <div className="today-grid">
-            {d.slots.map((s) => (
-              <div key={s.feed.key} className={`slot slot-${s.status}`}>
-                <div className="slot-label">{s.feed.label} feed</div>
-                <div className="slot-status">
-                  {s.status === "done" ? (s.first!.timing === "on_time" ? "Done, on time" : `Done, ${formatDeviation(s.first!.deviationMinutes)}`) : s.status === "missed" ? "Missed" : "Not yet"}
+      <h1>Today · {formatDayLong(today)}</h1>
+      {!allBatches.length && (
+        <p className="notice warn">
+          No batches yet. <Link href="/admin/batches">Add a batch</Link> so staff can start recording.
+        </p>
+      )}
+      {batches.map((b) => {
+        const r = computeReport({
+          from: yesterday,
+          to: today,
+          schedules,
+          recordings: toInputs(rows.filter((x) => x.batch_id === b.id), urls),
+          activeFrom: b.active_from,
+          activeTo: b.closed_on,
+        });
+        return (
+          <section key={b.id} className="card">
+            <h2>{b.name}</h2>
+            {[...r.days].reverse().map((d) => (
+              <div key={d.dateKey} style={{ marginBottom: 12 }}>
+                <div className="small muted" style={{ marginBottom: 6 }}>
+                  {d.dateKey === today ? "Today" : "Yesterday"}
                 </div>
-                {s.first && (
-                  <div className="small">
-                    {formatLocalTime(s.first.recordedAt)} by {s.first.staffName}
-                    {s.first.videoUrl && (
-                      <>
-                        {" · "}
-                        <a href={s.first.videoUrl} target="_blank" rel="noreferrer">
-                          Watch
-                        </a>
-                      </>
-                    )}
-                  </div>
-                )}
+                <div className="today-grid" style={{ gridTemplateColumns: `repeat(${Math.min(d.slots.length, 4)}, 1fr)` }}>
+                  {d.slots.map((s) => (
+                    <div key={s.feed.key} className={`slot slot-${s.status}`}>
+                      <div className="slot-label">{s.feed.label} feed</div>
+                      <div className="slot-status">
+                        {s.status === "done"
+                          ? s.first!.timing === "on_time"
+                            ? "Done"
+                            : formatDeviation(s.first!.deviationMinutes)
+                          : s.status === "missed"
+                            ? "Missed"
+                            : "Not yet"}
+                      </div>
+                      {s.first && (
+                        <div className="small">
+                          {formatLocalTime(s.first.recordedAt)} by {s.first.staffName}
+                          {s.first.videoUrl && (
+                            <>
+                              {" · "}
+                              <a href={s.first.videoUrl} target="_blank" rel="noreferrer">
+                                Watch
+                              </a>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
-          </div>
-        </section>
-      ))}
+          </section>
+        );
+      })}
 
       <section className="card">
-        <h2>Last 7 days: {r.overallPercent}% ({r.loggedSlots} of {r.dueSlots} feeds)</h2>
+        <h2>Videos from the last 7 days ({rows.length})</h2>
         {list.length === 0 && <p className="muted">No videos yet.</p>}
         <div className="video-list">
           {list.map((x) => {
             const at = new Date(x.recorded_at);
-            const slot = assignSlot(at);
+            const slot = assignSlot(at, schedules);
             const url = urls.get(x.storage_path);
             return (
               <div key={x.id} className="video-row">
                 {url ? <video src={url} controls preload="none" playsInline className="thumb" /> : <div className="thumb" />}
                 <div>
                   <div>
-                    <strong>{formatDayLong(localDateKey(at))}, {formatLocalTime(at)}</strong> · {x.staff?.name}
+                    <strong>
+                      {formatDayLong(localDateKey(at))}, {formatLocalTime(at)}
+                    </strong>{" "}
+                    · {x.staff?.name}
                   </div>
+                  <div className="small">{x.batch?.name ?? <span className="muted">No batch</span>}</div>
                   <div className="small muted">
                     {slot ? `${slot.feed.label} feed, ${formatDeviation(slot.deviationMinutes)}` : "Outside feeding windows (not counted)"}
                     {x.duration_seconds ? ` · ${Math.round(Number(x.duration_seconds))}s` : ""}
@@ -71,9 +103,7 @@ export default async function Today() {
                       </>
                     )}
                   </div>
-                  {byId.get(x.id)?.flags?.length ? (
-                    <div className="small flag-text">⚑ {x.flags.map((f) => FLAG_LABELS[f] ?? f).join("; ")}</div>
-                  ) : null}
+                  {x.flags?.length ? <div className="small flag-text">⚑ {x.flags.map((f) => FLAG_LABELS[f] ?? f).join("; ")}</div> : null}
                 </div>
               </div>
             );

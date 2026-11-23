@@ -1,11 +1,8 @@
-import { FARM, type FeedConfig } from "./config.ts";
+import { FARM } from "./config.ts";
+import { scheduleFor, scheduledMinute, windowRange, type FeedConfig, type Schedule } from "./schedule.ts";
+export { hmToMinutes } from "./schedule.ts";
 
 const DAY_MS = 86_400_000;
-
-export function hmToMinutes(hm: string): number {
-  const [h, m] = hm.split(":").map(Number);
-  return h * 60 + m;
-}
 
 /** Shift a UTC instant into farm-local "wall clock" (as a UTC Date carrying local fields). */
 function toLocal(d: Date): Date {
@@ -40,22 +37,22 @@ export function dateRange(from: string, to: string): string[] {
   return out;
 }
 
-export type SlotMatch = { dateKey: string; feed: FeedConfig; deviationMinutes: number };
+export type SlotMatch = { dateKey: string; feed: FeedConfig; deviationMinutes: number; onTimeMinutes: number };
 
 /** Work out which scheduled feed a recording counts for. Null if it falls outside every window. */
-export function assignSlot(recordedAt: Date): SlotMatch | null {
+export function assignSlot(recordedAt: Date, schedules: Schedule[] = []): SlotMatch | null {
   const m = localMinutes(recordedAt);
   const today = localDateKey(recordedAt);
-  for (const feed of FARM.feeds) {
-    const s = hmToMinutes(feed.windowStart);
-    const e = hmToMinutes(feed.windowEnd);
-    const sched = hmToMinutes(feed.time);
-    if (s < e) {
-      if (m >= s && m < e) return { dateKey: today, feed, deviationMinutes: m - sched };
-    } else {
-      // Window crosses midnight
-      if (m >= s) return { dateKey: today, feed, deviationMinutes: m - sched };
-      if (m < e) return { dateKey: addDays(today, -1), feed, deviationMinutes: m + 1440 - sched };
+  const candidates: [string, number][] = [
+    [today, m],
+    [addDays(today, -1), m + 1440],
+  ];
+  for (const [day, minute] of candidates) {
+    const sch = scheduleFor(schedules, day);
+    for (const feed of sch.feeds) {
+      const [s, e] = windowRange(feed);
+      if (minute >= s && minute < e)
+        return { dateKey: day, feed, deviationMinutes: minute - scheduledMinute(feed), onTimeMinutes: sch.onTimeMinutes };
     }
   }
   return null;
@@ -63,13 +60,7 @@ export function assignSlot(recordedAt: Date): SlotMatch | null {
 
 /** When the window for a given feed on a given date closes. */
 export function slotWindowEnd(dateKey: string, feed: FeedConfig): Date {
-  const s = hmToMinutes(feed.windowStart);
-  const e = hmToMinutes(feed.windowEnd);
-  return localToUtc(dateKey, s < e ? e : e + 1440);
-}
-
-export function slotScheduledAt(dateKey: string, feed: FeedConfig): Date {
-  return localToUtc(dateKey, hmToMinutes(feed.time));
+  return localToUtc(dateKey, windowRange(feed)[1]);
 }
 
 /** "7:04am" style local time. */

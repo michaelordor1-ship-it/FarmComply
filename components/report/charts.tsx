@@ -1,11 +1,13 @@
 import type { DayRow, ReportData, Slot } from "@/lib/report";
 import { FARM } from "@/lib/config";
+import type { FeedConfig } from "@/lib/schedule";
 import { formatDay, formatDayLong, formatDeviation, formatLocalTime } from "@/lib/time";
 
 // Colors: categorical series for the two feeds, reserved status colors for slot outcomes
+// Categorical order for feeds (fixed, never cycled past 8: a schedule allows at most 8 feeds)
+export const SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
+
 export const C = {
-  am: "#2a78d6",
-  pm: "#eb6834",
   good: "#0ca30c",
   warning: "#fab219",
   critical: "#d03b3b",
@@ -16,11 +18,15 @@ export const C = {
   surface: "#ffffff",
 };
 
-const feedColor = (key: string) => (key === "am" ? C.am : C.pm);
+export function feedColor(feedList: FeedConfig[], key: string): string {
+  const i = feedList.findIndex((f) => f.key === key);
+  return SERIES[Math.max(i, 0) % SERIES.length];
+}
 
 function slotLook(s: Slot): { fill: string; glyph: string; text: string } {
   if (s.status === "pending") return { fill: C.pending, glyph: "·", text: "not due yet" };
   if (s.status === "missed") return { fill: C.critical, glyph: "✕", text: "no video" };
+  if (!s.first) return { fill: C.pending, glyph: "·", text: "" };
   const t = s.first!;
   const who = s.recordings.length > 1 ? `${t.staffName} +${s.recordings.length - 1}` : t.staffName;
   if (t.timing === "on_time") return { fill: C.good, glyph: "✓", text: `${formatLocalTime(t.recordedAt)} by ${who}` };
@@ -56,7 +62,8 @@ export function ComplianceMap({ days }: { days: DayRow[] }) {
       {days.map((d, i) => {
         const x = (i % cols) * (cw + gap);
         const y = Math.floor(i / cols) * (ch + 18);
-        const half = (cw - 2) / 2;
+        const n = Math.max(d.slots.length, 1);
+        const half = (cw - 2 * (n - 1)) / n;
         return (
           <g key={d.dateKey}>
             <text x={x} y={y + 12} fontSize="11" fill={C.ink2}>
@@ -69,10 +76,12 @@ export function ComplianceMap({ days }: { days: DayRow[] }) {
                 <g key={s.feed.key}>
                   <title>{`${formatDayLong(d.dateKey)} ${s.feed.label}: ${look.text}`}</title>
                   <rect x={sx} y={y + 17} width={half} height={ch - 20} rx="4" fill={look.fill} />
-                  <text x={sx + 6} y={y + 31} fontSize="9" fill="#fff" fontWeight="600">
-                    {s.feed.label}
-                  </text>
-                  <text x={sx + half - 6} y={y + 46} fontSize="13" fill="#fff" textAnchor="end" fontWeight="700">
+                  {n <= 3 && (
+                    <text x={sx + 4} y={y + 30} fontSize={n === 3 ? 8 : 9} fill="#fff" fontWeight="600">
+                      {s.feed.label}
+                    </text>
+                  )}
+                  <text x={sx + half / 2} y={y + 46} fontSize="13" fill="#fff" textAnchor="middle" fontWeight="700">
                     {look.glyph}
                   </text>
                 </g>
@@ -95,9 +104,9 @@ export function OverallChart({ r }: { r: ReportData }) {
       label: `Days (${r.daysCounted})`,
       total: r.daysCounted,
       segs: [
-        { v: r.daysBoth, color: C.good, name: "both feeds" },
-        { v: r.daysOne, color: C.warning, name: "one feed" },
-        { v: r.daysNone, color: C.critical, name: "no feed" },
+        { v: r.daysAll, color: C.good, name: "complete" },
+        { v: r.daysSome, color: C.warning, name: "partial" },
+        { v: r.daysNone, color: C.critical, name: "nothing" },
       ],
     },
     ...r.feeds.map((f) => ({
@@ -159,7 +168,7 @@ export function WeeklyChart({ r }: { r: ReportData }) {
   const left = 36;
   const plotH = H - top - bottom;
   const groupW = (W - left) / Math.max(r.weeks.length, 1);
-  const barW = Math.min(44, (groupW - 30) / FARM.feeds.length);
+  const barW = Math.max(6, Math.min(44, (groupW - 30) / Math.max(r.feedList.length, 1)));
   const yOf = (p: number) => top + plotH - (p / 100) * plotH;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img" aria-label="Weekly trend">
@@ -182,11 +191,11 @@ export function WeeklyChart({ r }: { r: ReportData }) {
             {w.perFeed.map((p, j) => {
               const x = gx + j * (barW + 2);
               const y = yOf(p.percent);
-              const label = FARM.feeds.find((f) => f.key === p.key)!.label;
+              const label = r.feedList.find((f) => f.key === p.key)!.label;
               return (
                 <g key={p.key}>
                   <title>{`Week ${w.index} ${label}: ${p.logged} of ${p.due} (${p.percent}%)`}</title>
-                  <rect x={x} y={Math.min(y, yOf(0) - 2)} width={barW} height={Math.max(yOf(0) - y, 2)} rx="4" fill={feedColor(p.key)} />
+                  <rect x={x} y={Math.min(y, yOf(0) - 2)} width={barW} height={Math.max(yOf(0) - y, 2)} rx="4" fill={feedColor(r.feedList, p.key)} />
                   <text x={x + barW / 2} y={Math.min(y, yOf(0) - 2) - 5} fontSize="11" fill={C.ink} textAnchor="middle">
                     {p.percent}%
                   </text>
@@ -221,11 +230,11 @@ export function TimingChart({ r }: { r: ReportData }) {
   const step = (W - left - 10) / Math.max(r.days.length, 1);
   const xOf = (i: number) => left + step * (i + 0.5);
   const ticks = [minDev, 0, maxDev].map((t) => Math.round(t / 30) * 30);
-  const uniq = [...new Set([...ticks, -FARM.onTimeMinutes, FARM.onTimeMinutes])].filter((t) => t >= minDev && t <= maxDev);
+  const uniq = [...new Set([...ticks, -r.onTimeMinutes, r.onTimeMinutes])].filter((t) => t >= minDev && t <= maxDev);
   const lbl = (t: number) => (t === 0 ? "on time" : `${t > 0 ? "+" : ""}${Math.abs(t) >= 60 ? `${(t / 60).toFixed(t % 60 ? 1 : 0)}h` : `${t}m`}`);
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img" aria-label="Timing against schedule">
-      <rect x={left} width={W - left - 10} y={yOf(FARM.onTimeMinutes)} height={yOf(-FARM.onTimeMinutes) - yOf(FARM.onTimeMinutes)} fill="#0ca30c" opacity="0.08" />
+      <rect x={left} width={W - left - 10} y={yOf(r.onTimeMinutes)} height={yOf(-r.onTimeMinutes) - yOf(r.onTimeMinutes)} fill="#0ca30c" opacity="0.08" />
       {uniq.map((t) => (
         <g key={t}>
           <line x1={left} x2={W - 10} y1={yOf(t)} y2={yOf(t)} stroke={t === 0 ? C.ink2 : C.grid} />
@@ -244,7 +253,14 @@ export function TimingChart({ r }: { r: ReportData }) {
       {pts.map(({ i, s, dev }) => (
         <g key={`${s.dateKey}${s.feed.key}`}>
           <title>{`${formatDayLong(s.dateKey)} ${s.feed.label}: ${formatLocalTime(s.first!.recordedAt)} (${formatDeviation(dev)})`}</title>
-          <circle cx={xOf(i) + (s.feed.key === "am" ? -3 : 3)} cy={yOf(dev)} r="5" fill={feedColor(s.feed.key)} stroke="#fff" strokeWidth="2" />
+          <circle
+            cx={xOf(i) + (r.feedList.findIndex((f) => f.key === s.feed.key) - (r.feedList.length - 1) / 2) * 3}
+            cy={yOf(dev)}
+            r="5"
+            fill={feedColor(r.feedList, s.feed.key)}
+            stroke="#fff"
+            strokeWidth="2"
+          />
         </g>
       ))}
     </svg>

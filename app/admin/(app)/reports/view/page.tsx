@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { buildReport } from "@/lib/data";
+import { buildBatchReport, fetchBatches } from "@/lib/data";
 import { localDateKey } from "@/lib/time";
 import ReportView from "@/components/report/ReportView";
 import PrintButton from "@/components/PrintButton";
@@ -15,17 +15,23 @@ export default async function ViewReport({ searchParams }: { searchParams: Promi
   if (from > to) [from, to] = [to, from];
   const days = (new Date(to).getTime() - new Date(from).getTime()) / 86_400_000 + 1;
   if (days > 366) return <p className="notice err">Choose a period of a year or less.</p>;
+  const batch = (await fetchBatches(true)).find((b) => b.id === sp.batch);
+  if (!batch) return <p className="notice err">Choose a batch.</p>;
 
-  const r = await buildReport(from, to, true);
+  const r = await buildBatchReport(from, to, batch, true);
   return (
     <>
       <div className="report-actions no-print">
-        <Link href="/admin/reports" className="link-btn">
-          ← Change period
+        <Link href={`/admin/reports?from=${from}&to=${to}`} className="link-btn">
+          ← All batches
         </Link>
         <PrintButton />
       </div>
-      <ReportView r={r} />
+      {r.days.length === 0 ? (
+        <p className="notice warn">{batch.name} was not open during this period.</p>
+      ) : (
+        <ReportView r={r} />
+      )}
     </>
   );
 }

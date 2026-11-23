@@ -11,6 +11,7 @@ export default function SampleReport() {
     recordings: sampleRecordings(),
     staff: SAMPLE_STAFF,
     now: new Date("2026-11-17T09:00:00Z"),
+    batchName: "October 2026 (sample)",
   });
   return (
     <>

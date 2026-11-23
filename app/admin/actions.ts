@@ -6,6 +6,8 @@ import { revalidatePath } from "next/cache";
 import { ADMIN_COOKIE, adminSessionValue, checkAdminPassword, isAdmin, randomCode } from "@/lib/auth";
 import { db } from "@/lib/supabase";
 import { FARM } from "@/lib/config";
+import { localDateKey } from "@/lib/time";
+import { validateFeeds, type FeedInput } from "@/lib/schedule";
 
 export async function login(_: unknown, form: FormData): Promise<{ error: string } | undefined> {
   const pw = String(form.get("password") ?? "");
@@ -76,4 +78,83 @@ export async function unlinkPhone(form: FormData) {
   const id = String(form.get("staffId"));
   await db().from("devices").update({ revoked_at: new Date().toISOString() }).eq("staff_id", id).is("revoked_at", null);
   revalidatePath("/admin/staff");
+}
+
+// ---------- Batches ----------
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+export async function createBatch(form: FormData) {
+  await guard();
+  const month = Number(form.get("month"));
+  const year = Number(form.get("year"));
+  const label = String(form.get("label") ?? "").trim().slice(0, 40);
+  if (!(month >= 1 && month <= 12) || !(year >= 2020 && year <= 2100)) return;
+  const name = `${MONTHS[month - 1]} ${year}${label ? ` (${label})` : ""}`;
+  const today = localDateKey(new Date());
+  const startRaw = String(form.get("activeFrom") ?? "");
+  const activeFrom = /^\d{4}-\d{2}-\d{2}$/.test(startRaw) ? startRaw : today;
+  await db().from("batches").insert({
+    name,
+    month: `${year}-${String(month).padStart(2, "0")}-01`,
+    active_from: activeFrom,
+  });
+  revalidatePath("/admin/batches");
+}
+
+export async function closeBatch(form: FormData) {
+  await guard();
+  const id = String(form.get("batchId"));
+  const raw = String(form.get("closedOn") ?? "");
+  const closedOn = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : localDateKey(new Date());
+  await db().from("batches").update({ closed_on: closedOn }).eq("id", id);
+  revalidatePath("/admin/batches");
+}
+
+export async function reopenBatch(form: FormData) {
+  await guard();
+  await db().from("batches").update({ closed_on: null }).eq("id", String(form.get("batchId")));
+  revalidatePath("/admin/batches");
+}
+
+export async function deleteBatch(form: FormData) {
+  await guard();
+  const id = String(form.get("batchId"));
+  const { count } = await db().from("recordings").select("id", { count: "exact", head: true }).eq("batch_id", id);
+  if (count) return; // never delete a batch that has videos; close it instead
+  await db().from("batches").delete().eq("id", id);
+  revalidatePath("/admin/batches");
+}
+
+// ---------- Feeding schedule ----------
+
+export async function saveSchedule(_: unknown, form: FormData): Promise<{ error?: string; ok?: boolean }> {
+  await guard();
+  let feeds: FeedInput[];
+  try {
+    feeds = JSON.parse(String(form.get("feeds") ?? "[]"));
+  } catch {
+    return { error: "Could not read the schedule." };
+  }
+  feeds = feeds.map((f) => ({ time: String(f.time), windowStart: String(f.windowStart), windowEnd: String(f.windowEnd) }));
+  const onTime = Number(form.get("onTimeMinutes"));
+  const err = validateFeeds(feeds, onTime);
+  if (err) return { error: err };
+  const today = localDateKey(new Date());
+  const raw = String(form.get("effectiveFrom") ?? "");
+  const effectiveFrom = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : today;
+  if (effectiveFrom < today) return { error: "The new schedule can start today or later, not in the past." };
+  const { error } = await db()
+    .from("schedules")
+    .upsert({ effective_from: effectiveFrom, feeds, on_time_minutes: onTime }, { onConflict: "effective_from" });
+  if (error) return { error: "Could not save. Try again." };
+  revalidatePath("/admin/settings");
+  return { ok: true };
+}
+
+export async function deleteSchedule(form: FormData) {
+  await guard();
+  const eff = String(form.get("effectiveFrom"));
+  if (eff > localDateKey(new Date())) await db().from("schedules").delete().eq("effective_from", eff);
+  revalidatePath("/admin/settings");
 }
