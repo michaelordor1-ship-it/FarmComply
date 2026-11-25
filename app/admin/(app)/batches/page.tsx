@@ -1,5 +1,4 @@
-import { db } from "@/lib/supabase";
-import { fetchBatches } from "@/lib/data";
+import { fetchBatches, videoCountsByBatch } from "@/lib/data";
 import { formatDayLong, localDateKey } from "@/lib/time";
 import { closeBatch, createBatch, deleteBatch, reopenBatch } from "../../actions";
 
@@ -9,9 +8,7 @@ export default async function Batches() {
   const today = localDateKey(new Date());
   const [y, m] = today.split("-").map(Number);
   const batches = await fetchBatches(true);
-  const { data: counts } = await db().from("recordings").select("batch_id").eq("status", "uploaded").not("batch_id", "is", null);
-  const videos = new Map<string, number>();
-  for (const c of counts ?? []) videos.set(c.batch_id, (videos.get(c.batch_id) ?? 0) + 1);
+  const videos = await videoCountsByBatch(batches.map((b) => b.id));
   const open = batches.filter((b) => !b.closed_on || b.closed_on >= today);
   const closed = batches.filter((b) => b.closed_on && b.closed_on < today);
   const years = [y - 1, y, y + 1];

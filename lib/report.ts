@@ -9,6 +9,7 @@ export type RecordingInput = {
   recordedAt: string | Date;
   flags?: string[];
   videoUrl?: string | null;
+  durationSeconds?: number | null;
 };
 
 export type StaffInput = { id: string; name: string };
@@ -24,6 +25,10 @@ export type SlotRecording = {
   timing: Timing;
   flags: string[];
   videoUrl?: string | null;
+  durationSeconds?: number | null;
+  /** For videos that were not counted: the feed they would have counted for */
+  slotDate?: string;
+  feedLabel?: string;
 };
 
 export type Slot = {
@@ -102,6 +107,9 @@ export type ReportData = {
   staff: StaffStats[];
   longestGap: Streak;
   outOfWindow: SlotRecording[];
+  /** Videos inside a feeding window but shorter than the minimum length */
+  tooShort: SlotRecording[];
+  minSeconds: number;
   flagCounts: Record<string, number>;
   totalRecordings: number;
 };
@@ -148,6 +156,7 @@ export function computeReport(opts: {
   const feedList = [...feedByKey.values()].sort((a, b) => hmToMinutes(a.time) - hmToMinutes(b.time));
 
   const outOfWindow: SlotRecording[] = [];
+  const tooShort: SlotRecording[] = [];
   const flagCounts: Record<string, number> = {};
   let totalRecordings = 0;
   const sorted = [...opts.recordings]
@@ -165,6 +174,7 @@ export function computeReport(opts: {
       timing: match ? timingOf(match.deviationMinutes, match.onTimeMinutes) : "late",
       flags: r.flags ?? [],
       videoUrl: r.videoUrl,
+      durationSeconds: r.durationSeconds ?? null,
     };
     const slot = match ? slotMap.get(`${match.dateKey}|${match.feed.key}`) : undefined;
     if (!slot) {
@@ -176,6 +186,13 @@ export function computeReport(opts: {
           for (const f of rec.flags) flagCounts[f] = (flagCounts[f] ?? 0) + 1;
         }
       }
+      continue;
+    }
+    if (rec.durationSeconds != null && rec.durationSeconds < FARM.minCountedSeconds) {
+      // Too short to count as proof of feeding
+      tooShort.push({ ...rec, slotDate: slot.dateKey, feedLabel: slot.feed.label });
+      totalRecordings++;
+      for (const f of rec.flags) flagCounts[f] = (flagCounts[f] ?? 0) + 1;
       continue;
     }
     slot.recordings.push(rec);
@@ -275,7 +292,7 @@ export function computeReport(opts: {
       devsByStaff.set(r.staffId, [...(devsByStaff.get(r.staffId) ?? []), r.deviationMinutes]);
     }
   }
-  for (const r of outOfWindow) ensure(r.staffId, r.staffName).recordings++;
+  for (const r of [...outOfWindow, ...tooShort]) ensure(r.staffId, r.staffName).recordings++;
   for (const st of staffMap.values()) st.avgDeviation = avg(devsByStaff.get(st.staffId) ?? []);
 
   let best: Streak = null;
@@ -323,6 +340,8 @@ export function computeReport(opts: {
     staff: [...staffMap.values()].sort((a, b) => b.feedsDone - a.feedsDone),
     longestGap: best,
     outOfWindow,
+    tooShort,
+    minSeconds: FARM.minCountedSeconds,
     flagCounts,
     totalRecordings,
   };
@@ -344,7 +363,7 @@ export const FLAG_LABELS: Record<string, string> = {
   clock_mismatch: "Phone clock was more than 2 minutes off server time",
   late_upload: "Uploaded more than 3 hours after recording",
   no_location: "No GPS location (permission denied or unavailable)",
-  short_clip: "Clip shorter than 3 seconds",
+  short_clip: `Shorter than ${FARM.minCountedSeconds} seconds (not counted)`,
 };
 
 export { addDays };

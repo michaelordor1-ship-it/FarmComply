@@ -7,6 +7,7 @@ type TodaySlot = { label: string; status: "done" | "missed" | "pending"; by: str
 type BatchToday = { id: string; name: string; slots: TodaySlot[] };
 
 const MAX_SECONDS = 60;
+const MIN_SECONDS = 45; // shorter clips don't count as a feed
 const CACHE_KEY = "vf_today";
 const MIME_CANDIDATES = [
   "video/mp4;codecs=avc1,mp4a.40.2",
@@ -74,17 +75,39 @@ export default function StaffApp({ name }: { name: string }) {
   const chunksRef = useRef<Blob[]>([]);
   const metaRef = useRef<{ start: number; batch: BatchToday; ticket: Promise<string | null>; pos: Promise<GeolocationPosition | null> } | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const discardRef = useRef(false);
 
-  // Attach the live camera to the preview whenever the <video> element mounts
+  // Attach the live camera to the preview whenever the <video> element mounts.
+  // iPhone (Safari and Chrome both use WebKit) needs playsinline + muted set before the stream is attached.
+  const [previewStalled, setPreviewStalled] = useState(false);
+  const previewEl = useRef<HTMLVideoElement | null>(null);
   const previewRef = useCallback((el: HTMLVideoElement | null) => {
+    previewEl.current = el;
     if (!el || !streamRef.current) return;
-    if (el.srcObject !== streamRef.current) el.srcObject = streamRef.current;
+    el.setAttribute("playsinline", "");
+    el.setAttribute("webkit-playsinline", "");
+    el.setAttribute("muted", "");
+    el.setAttribute("autoplay", "");
     el.muted = true;
     el.defaultMuted = true;
-    el.setAttribute("muted", "");
-    el.setAttribute("playsinline", "");
-    el.play().catch(() => {});
+    if (el.srcObject !== streamRef.current) el.srcObject = streamRef.current;
+    const tryPlay = () => el.play().catch(() => setPreviewStalled(true));
+    el.onloadedmetadata = tryPlay;
+    el.onplaying = () => setPreviewStalled(false);
+    tryPlay();
+    // If nothing is showing after a moment, offer a tap to start it
+    setTimeout(() => {
+      if (previewEl.current === el && (el.paused || el.videoWidth === 0)) setPreviewStalled(true);
+    }, 1500);
   }, []);
+
+  const kickPreview = () => {
+    const el = previewEl.current;
+    if (!el || !streamRef.current) return;
+    el.srcObject = null;
+    el.srcObject = streamRef.current;
+    el.play().then(() => setPreviewStalled(false)).catch(() => {});
+  };
 
   const refreshToday = useCallback(async () => {
     try {
@@ -153,6 +176,7 @@ export default function StaffApp({ name }: { name: string }) {
       });
       streamRef.current = stream;
       setBatch(b);
+      setPreviewStalled(false);
       setMode("camera");
       getPosition(); // warm up GPS
     } catch {
@@ -175,6 +199,11 @@ export default function StaffApp({ name }: { name: string }) {
   const finish = async () => {
     setRecording(false);
     stopStream();
+    if (discardRef.current) {
+      discardRef.current = false;
+      setMode("home");
+      return;
+    }
     const meta = metaRef.current!;
     const rec = recRef.current!;
     const mimeType = (rec.mimeType || pickMime() || "video/webm").split(";")[0];
@@ -224,6 +253,7 @@ export default function StaffApp({ name }: { name: string }) {
       ),
       pos: withTimeout(getPosition(), 15_000),
     };
+    discardRef.current = false;
     rec.start(1000);
     setRecording(true);
     setSeconds(0);
@@ -239,10 +269,26 @@ export default function StaffApp({ name }: { name: string }) {
     return (
       <div className="camera">
         <video ref={previewRef} playsInline muted autoPlay className="camera-view" />
+        {previewStalled && (
+          <button className="preview-kick" onClick={kickPreview}>
+            Tap to show the camera
+          </button>
+        )}
         <div className="camera-top">
           {recording ? (
-            <span className="rec-badge">
-              ● REC {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+            <span className="rec-left">
+              <span className="rec-badge">
+                ● REC {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+              </span>
+              <button
+                className="link-btn light"
+                onClick={() => {
+                  discardRef.current = true;
+                  stop();
+                }}
+              >
+                Discard
+              </button>
             </span>
           ) : (
             <button className="link-btn light" onClick={closeCamera}>
@@ -253,9 +299,20 @@ export default function StaffApp({ name }: { name: string }) {
         </div>
         <div className="camera-bottom">
           <p className="camera-hint">
-            {recording ? (left <= 10 ? `Stopping in ${left}s` : "Show the feed going into the pond. Tap to stop.") : "Point at the pond, then tap to record."}
+            {!recording
+              ? `Point at the pond, then tap to record. Record at least ${MIN_SECONDS} seconds.`
+              : seconds < MIN_SECONDS
+                ? `Keep recording: ${MIN_SECONDS - seconds}s to go`
+                : left <= 10
+                  ? `Stopping in ${left}s`
+                  : "Done. Tap to stop, or keep going."}
           </p>
-          <button className={`shutter ${recording ? "is-recording" : ""}`} onClick={recording ? stop : start} aria-label={recording ? "Stop" : "Record"}>
+          <button
+            className={`shutter ${recording ? "is-recording" : ""} ${recording && seconds < MIN_SECONDS ? "is-locked" : ""}`}
+            onClick={recording ? () => seconds >= MIN_SECONDS && stop() : start}
+            aria-label={recording ? "Stop" : "Record"}
+            style={recording && seconds < MIN_SECONDS ? ({ "--progress": `${(seconds / MIN_SECONDS) * 360}deg` } as React.CSSProperties) : undefined}
+          >
             <span />
           </button>
         </div>

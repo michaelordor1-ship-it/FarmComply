@@ -178,3 +178,14 @@ select { font-size: 16px; padding: 11px; border-radius: 10px; border: 1px solid 
 .batch-row:first-of-type { border-top: 0; }
 .batch-grid { display: grid; gap: 12px; }
 .compare td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.preview-kick { position: absolute; top: 45%; left: 50%; transform: translate(-50%, -50%); background: #fff; color: var(--navy); border: 0; border-radius: 30px; padding: 14px 22px; font-size: 16px; font-weight: 700; z-index: 2; }
+.camera-view { position: absolute; inset: 0; background: #000; }
+.camera-top, .camera-bottom { z-index: 1; }
+.share-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.wa-btn { background: #1a8f4e; }
+.report-actions { gap: 10px; flex-wrap: wrap; }
+.thumb-empty { display: grid; place-items: center; color: #9aa0a6; font-size: 12px; background: #1b1b1b; }
+.rec-left { display: flex; align-items: center; gap: 14px; }
+/* Stop is locked until the minimum length: the ring fills up as time passes */
+.shutter.is-locked { border-color: rgba(255,255,255,.35); background: conic-gradient(#fff var(--progress, 0deg), transparent 0); }
+.shutter.is-locked span { opacity: .55; }

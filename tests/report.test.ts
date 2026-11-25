@@ -132,3 +132,19 @@ test("split windows evenly", async () => {
   ]);
   assert.equal(validateFeeds(out, 30), null);
 });
+
+test("clips under 45 seconds don't count", () => {
+  const r = computeReport({
+    from: "2026-11-20",
+    to: "2026-11-20",
+    recordings: [
+      { id: "short", staffId: "s", staffName: "S", recordedAt: at("2026-11-20", "07:02"), durationSeconds: 30 },
+      { id: "ok", staffId: "s", staffName: "S", recordedAt: at("2026-11-20", "19:05"), durationSeconds: 50 },
+    ],
+    now: new Date("2026-11-22T00:00:00Z"),
+  });
+  assert.equal(r.loggedSlots, 1);
+  assert.equal(r.tooShort.length, 1);
+  assert.equal(r.tooShort[0].feedLabel, "7am");
+  assert.equal(r.days[0].slots[0].status, "missed");
+});

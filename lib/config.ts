@@ -13,11 +13,14 @@ export const FARM = {
   defaultOnTimeMinutes: 30,
   targetPercent: 90,
   maxClipSeconds: 60,
-  minClipSeconds: 3,
+  // A video shorter than this does not count as a feed
+  minCountedSeconds: 45,
   // A device clock this far from server time gets flagged
   clockSkewFlagSeconds: 120,
   // A video uploaded this long after recording gets flagged
   lateUploadFlagHours: 3,
   inviteValidDays: 7,
   videoBucket: "feeding-videos",
+  // Videos older than this are deleted from storage; their records stay so reports are unchanged
+  videoRetentionDays: 40,
 };

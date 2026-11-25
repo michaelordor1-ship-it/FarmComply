@@ -59,6 +59,7 @@ create table if not exists recordings (
   client_clip_id text unique,
   status text not null default 'pending' check (status in ('pending', 'uploaded')),
   storage_path text not null,
+  video_deleted_at timestamptz,    -- set when the video file is removed after the retention period
   mime_type text,
   size_bytes bigint,
   duration_seconds numeric,
@@ -79,6 +80,7 @@ create table if not exists recordings (
 create index if not exists recordings_recorded_at_idx on recordings (recorded_at);
 create index if not exists recordings_staff_idx on recordings (staff_id);
 create index if not exists recordings_batch_idx on recordings (batch_id);
+create index if not exists recordings_cleanup_idx on recordings (recorded_at) where video_deleted_at is null;
 
 -- Lock the tables down: the app only talks to them from the server with the service role key.
 alter table staff enable row level security;

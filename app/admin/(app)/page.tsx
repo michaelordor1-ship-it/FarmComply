@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { after } from "next/server";
+import { FARM } from "@/lib/config";
+import { deleteOldVideos } from "@/lib/cleanup";
 import { batchesOverlapping, fetchBatches, fetchRecordings, fetchSchedules, signedVideoUrls, toInputs } from "@/lib/data";
 import { computeReport, FLAG_LABELS } from "@/lib/report";
 import { addDays, assignSlot, formatDayLong, formatDeviation, formatLocalTime, localDateKey } from "@/lib/time";
@@ -8,7 +11,9 @@ export default async function Today() {
   const yesterday = addDays(today, -1);
   const from = addDays(today, -6);
   const [rows, schedules, allBatches] = await Promise.all([fetchRecordings(from, today), fetchSchedules(), fetchBatches(true)]);
-  const urls = await signedVideoUrls(rows.map((r) => r.storage_path));
+  const urls = await signedVideoUrls(rows);
+  // Housekeeping: remove videos past the retention period after this page is sent
+  after(() => deleteOldVideos().catch(() => {}));
   const batches = batchesOverlapping(allBatches, yesterday, today);
   const list = [...rows].reverse();
 
@@ -82,7 +87,11 @@ export default async function Today() {
             const url = urls.get(x.storage_path);
             return (
               <div key={x.id} className="video-row">
-                {url ? <video src={url} controls preload="none" playsInline className="thumb" /> : <div className="thumb" />}
+                {url ? (
+                  <video src={url} controls preload="none" playsInline className="thumb" />
+                ) : (
+                  <div className="thumb thumb-empty">{x.video_deleted_at ? "Video deleted" : "No video"}</div>
+                )}
                 <div>
                   <div>
                     <strong>
@@ -94,6 +103,9 @@ export default async function Today() {
                   <div className="small muted">
                     {slot ? `${slot.feed.label} feed, ${formatDeviation(slot.deviationMinutes)}` : "Outside feeding windows (not counted)"}
                     {x.duration_seconds ? ` · ${Math.round(Number(x.duration_seconds))}s` : ""}
+                    {x.duration_seconds != null && Number(x.duration_seconds) < FARM.minCountedSeconds && (
+                      <strong className="flag-text"> · Too short, not counted</strong>
+                    )}
                     {x.latitude !== null && x.longitude !== null && (
                       <>
                         {" · "}

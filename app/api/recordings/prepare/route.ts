@@ -58,7 +58,7 @@ export async function POST(req: Request) {
   const lng = num(b?.longitude);
   if (lat === null || lng === null) flags.push("no_location");
   const duration = num(b?.durationSeconds);
-  if (duration !== null && duration < FARM.minClipSeconds) flags.push("short_clip");
+  if (duration !== null && duration < FARM.minCountedSeconds) flags.push("short_clip");
 
   const mime = typeof b?.mimeType === "string" ? b.mimeType.slice(0, 80) : "video/webm";
   const ext = mime.includes("mp4") ? "mp4" : "webm";

@@ -83,6 +83,7 @@ export function buildFindings(r: ReportData): Finding[] {
 
   const bits: string[] = [];
   if (r.outOfWindow.length) bits.push(`${r.outOfWindow.length} video${r.outOfWindow.length === 1 ? " was" : "s were"} recorded outside every feeding window and not counted`);
+  if (r.tooShort.length) bits.push(`${r.tooShort.length} video${r.tooShort.length === 1 ? " was" : "s were"} shorter than ${r.minSeconds} seconds and not counted`);
   if (r.flagCounts.clock_mismatch) bits.push(`${r.flagCounts.clock_mismatch} came from a phone with the wrong clock`);
   if (r.flagCounts.late_upload) bits.push(`${r.flagCounts.late_upload} were uploaded hours after recording`);
   if (bits.length) out.push({ lead: "Check these videos.", detail: bits.join("; ") + ". See the log below." });

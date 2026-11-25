@@ -2,7 +2,7 @@
 
 Feeding compliance app for Verank Farms. Staff open the app and record a short video when they feed the fish. The app stamps the time, works out which feed it counts for, and gives the admin a compliance report for any period.
 
-- **Staff app** (`/`): staff tap the batch they are feeding, then record. Records inside the app only (no gallery uploads), up to 60 seconds, about 4 MB at most per clip. Works offline: clips wait on the phone and upload when there is data.
+- **Staff app** (`/`): staff tap the batch they are feeding, then record. Records inside the app only (no gallery uploads), at least 45 seconds (the stop button stays locked until then) and up to 60 seconds, about 4 MB at most per clip. Works offline: clips wait on the phone and upload when there is data.
 - **Admin** (`/admin`): Today (per batch), Reports, Batches, Staff, Schedule.
 - **Batches** (`/admin/batches`): add a batch by month and year (e.g. October 2026, with an optional label such as "Pond 2"); close it when harvested. Every open batch is expected at every feeding time.
 - **Schedule** (`/admin/settings`): set any number of feeds a day (up to 8), each with its time and the window in which a video counts, plus the on-time allowance. Changes start from a chosen date; earlier days keep the schedule that was in force then.
@@ -17,6 +17,7 @@ Feeding compliance app for Verank Farms. Staff open the app and record a short v
 | Missed | a feed with no video for that batch once its window has closed |
 | Two videos for one feed and batch | counts once, credited to both staff |
 | Batch | counted from its start date until its close date |
+| Minimum length | videos under 45 seconds don't count (`minCountedSeconds` in `lib/config.ts`); they are listed in the report as not counted |
 
 ## How the time is proven
 
@@ -29,13 +30,14 @@ Each staff member is tied to one phone. A new access code moves them to a new ph
 ## Setup (about 15 minutes)
 
 1. **Supabase**: create a project. In the SQL editor, run `supabase/schema.sql`. This creates the tables and a private `feeding-videos` bucket.
-   - **Already ran schema.sql before batches existed?** Run `supabase/migrations/002_batches_and_schedule.sql` once instead.
+   - **Already ran an older schema.sql?** Run the files in `supabase/migrations/` that you haven't run yet, in order (002, then 003). Each is safe to run twice.
 2. **GitHub**: upload this folder to a new repo.
 3. **Vercel**: import the repo and add these environment variables (see `.env.example`):
    - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (Supabase > Settings > API)
    - `ADMIN_PASSWORD`: the admin's login password
    - `SESSION_SECRET`: 64 random characters (`openssl rand -hex 32`)
    - `APP_URL`: the deployed URL, e.g. `https://verank-feeding.vercel.app`
+   - `CRON_SECRET`: another long random string. Lets Vercel run the daily video cleanup (`vercel.json`).
 4. Deploy, open `/admin` and sign in. Set the **Schedule**, add your **Batches**, then go to **Staff**, add each staff member and tap **Send on WhatsApp**.
 5. Staff open the link on their phone, tap **Link this phone**, allow camera, microphone and location, then add the app to their home screen.
    - iPhone: add to Home Screen first, open the app from the home screen, then enter the code (iPhone keeps home screen apps separate from Safari).
@@ -53,6 +55,8 @@ npm test                     # report logic tests (replays the paper log: 43% / 
 
 ## Notes
 
-- Storage: a 30-second clip is about 2 MB (4 MB at the 60-second limit). Each batch at 2 feeds a day adds roughly 120 to 240 MB a month. The Supabase free plan includes 1 GB, so with several batches plan to upgrade or delete old videos within a few months.
+- Video retention: videos are deleted from storage after 40 days (`videoRetentionDays` in `lib/config.ts`). The record of each feed stays, so reports are unchanged; only the video link disappears. Cleanup runs daily at 03:00 WAT via Vercel Cron, and also whenever the admin opens the Today page.
+- Large data: the app reads recordings in pages of 1,000, so reports stay correct however many videos there are.
+- Storage: a 30-second clip is about 2 MB (4 MB at the 60-second limit). Each batch at 2 feeds a day adds roughly 120 to 240 MB a month; with 40-day retention, storage levels off at about 160 to 320 MB per batch.
 - The app proves which phone recorded a video, not who held it.
 - Uploads only run while the app is open. Clips recorded offline stay on the phone until the app is opened with data.

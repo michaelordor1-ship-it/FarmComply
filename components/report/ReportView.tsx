@@ -2,7 +2,7 @@ import type { ReportData, SlotRecording } from "@/lib/report";
 import { FLAG_LABELS, allWord, dayStatusLabel } from "@/lib/report";
 import { buildFindings, buildRecommendations } from "@/lib/findings";
 import { FARM } from "@/lib/config";
-import { formatDayLong, formatDayYear, formatDeviation, formatLocalTime, formatDay } from "@/lib/time";
+import { formatDayLong, formatDayYear, formatDeviation, formatLocalTime, formatDay, localDateKey } from "@/lib/time";
 import { C, ComplianceMap, Legend, OverallChart, TimingChart, WeeklyChart, feedColor } from "./charts";
 
 function Tile({ value, label, sub }: { value: string; label: string; sub: string }) {
@@ -207,7 +207,10 @@ export default function ReportView({ r, sample = false }: { r: ReportData; sampl
           </li>
           {r.batchName && <li>Only videos tagged with batch {r.batchName} are counted.</li>}
           <li>On time means within {tol} minutes of the scheduled time. Off-schedule feeds still count as done.</li>
-          {r.outOfWindow.length > 0 && <li>{r.outOfWindow.length} video(s) fell outside every window and are listed below but not counted.</li>}
+          <li>A video must be at least {r.minSeconds} seconds long to count.</li>
+          {r.outOfWindow.length + r.tooShort.length > 0 && (
+            <li>{r.outOfWindow.length + r.tooShort.length} video(s) were not counted (too short or outside every window) and are listed below.</li>
+          )}
           {flagEntries.map(([k, v]) => (
             <li key={k}>
               ⚑ {v} × {FLAG_LABELS[k] ?? k}
@@ -245,30 +248,38 @@ export default function ReportView({ r, sample = false }: { r: ReportData; sampl
             ))}
           </tbody>
         </table>
-        {r.outOfWindow.length > 0 && (
+        {r.outOfWindow.length + r.tooShort.length > 0 && (
           <>
-            <h3>Videos outside the feeding windows</h3>
+            <h3>Videos not counted</h3>
             <table className="tbl">
               <thead>
                 <tr>
                   <th>Date</th>
                   <th>Time</th>
                   <th>Staff</th>
+                  <th>Reason</th>
                 </tr>
               </thead>
               <tbody>
-                {r.outOfWindow.map((o) => (
-                  <tr key={o.id}>
-                    <td>{formatDayLong(new Date(o.recordedAt.getTime() + FARM.utcOffsetMinutes * 60_000).toISOString().slice(0, 10))}</td>
-                    <td>{o.videoUrl ? <a href={o.videoUrl}>{formatLocalTime(o.recordedAt)}</a> : formatLocalTime(o.recordedAt)}</td>
-                    <td>{o.staffName}</td>
-                  </tr>
-                ))}
+                {[...r.tooShort, ...r.outOfWindow]
+                  .sort((a, b) => a.recordedAt.getTime() - b.recordedAt.getTime())
+                  .map((o) => (
+                    <tr key={o.id}>
+                      <td>{formatDayLong(localDateKey(o.recordedAt))}</td>
+                      <td>{o.videoUrl ? <a href={o.videoUrl}>{formatLocalTime(o.recordedAt)}</a> : formatLocalTime(o.recordedAt)}</td>
+                      <td>{o.staffName}</td>
+                      <td>
+                        {o.feedLabel
+                          ? `Only ${Math.round(o.durationSeconds ?? 0)}s long (${o.feedLabel} feed needs ${r.minSeconds}s)`
+                          : "Outside every feeding window"}
+                      </td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </>
         )}
-        <p className="caption">Times link to the video (links expire after 7 days; regenerate the report for fresh links). ⚑ marks a flagged video.</p>
+        <p className="caption">Times link to the video (links expire after 7 days; regenerate the report for fresh links). Videos are kept for {FARM.videoRetentionDays} days, then deleted; the record of the feed stays. ⚑ marks a flagged video.</p>
       </section>
     </article>
   );

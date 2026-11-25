@@ -3,6 +3,9 @@ import { buildBatchReport, fetchBatches } from "@/lib/data";
 import { localDateKey } from "@/lib/time";
 import ReportView from "@/components/report/ReportView";
 import PrintButton from "@/components/PrintButton";
+import ShareReport from "@/components/ShareReport";
+import { makeShareToken } from "@/lib/share";
+import { reportSummary } from "@/lib/summary";
 
 const isDate = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
@@ -19,13 +22,18 @@ export default async function ViewReport({ searchParams }: { searchParams: Promi
   if (!batch) return <p className="notice err">Choose a batch.</p>;
 
   const r = await buildBatchReport(from, to, batch, true);
+  const base = (process.env.APP_URL ?? "").replace(/\/$/, "");
+  const shareUrl = `${base}/r/${makeShareToken(batch.id, from, to)}`;
   return (
     <>
       <div className="report-actions no-print">
         <Link href={`/admin/reports?from=${from}&to=${to}`} className="link-btn">
           ← All batches
         </Link>
-        <PrintButton />
+        <div className="share-row">
+          {r.days.length > 0 && <ShareReport url={shareUrl} text={reportSummary(r)} />}
+          <PrintButton />
+        </div>
       </div>
       {r.days.length === 0 ? (
         <p className="notice warn">{batch.name} was not open during this period.</p>

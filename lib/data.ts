@@ -10,6 +10,7 @@ export type RecordingRow = {
   staff_id: string;
   batch_id: string | null;
   storage_path: string;
+  video_deleted_at: string | null;
   recorded_at: string;
   uploaded_at: string | null;
   time_source: string;
@@ -58,27 +59,50 @@ export async function fetchRecordings(from: string, to: string, batchId?: string
   const start = localToUtc(from, 0).toISOString();
   // A window can end up to 44 hours after its feed day starts
   const end = localToUtc(to, 44 * 60).toISOString();
-  let q = db()
-    .from("recordings")
-    .select(
-      "id, staff_id, batch_id, storage_path, recorded_at, uploaded_at, time_source, clock_skew_seconds, duration_seconds, latitude, longitude, flags, staff:staff_id (name), batch:batch_id (name)",
-    )
-    .eq("status", "uploaded")
-    .gte("recorded_at", start)
-    .lt("recorded_at", end)
-    .order("recorded_at");
-  if (batchId) q = q.eq("batch_id", batchId);
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data ?? []) as unknown as RecordingRow[];
+  // Supabase returns at most 1,000 rows per request, so read in pages until everything is in
+  const PAGE = 1000;
+  const out: RecordingRow[] = [];
+  for (let offset = 0; ; offset += PAGE) {
+    let q = db()
+      .from("recordings")
+      .select(
+        "id, staff_id, batch_id, storage_path, video_deleted_at, recorded_at, uploaded_at, time_source, clock_skew_seconds, duration_seconds, latitude, longitude, flags, staff:staff_id (name), batch:batch_id (name)",
+      )
+      .eq("status", "uploaded")
+      .gte("recorded_at", start)
+      .lt("recorded_at", end)
+      .order("recorded_at")
+      .order("id")
+      .range(offset, offset + PAGE - 1);
+    if (batchId) q = q.eq("batch_id", batchId);
+    const { data, error } = await q;
+    if (error) throw error;
+    out.push(...((data ?? []) as unknown as RecordingRow[]));
+    if (!data || data.length < PAGE) break;
+  }
+  return out;
 }
 
-export async function signedVideoUrls(paths: string[], expiresSeconds = 3600): Promise<Map<string, string>> {
+/** Signed playback links for videos that still exist (deleted ones are skipped). */
+export async function signedVideoUrls(rows: RecordingRow[], expiresSeconds = 3600): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  if (!paths.length) return map;
-  const { data } = await db().storage.from(FARM.videoBucket).createSignedUrls(paths, expiresSeconds);
-  for (const d of data ?? []) if (d.path && d.signedUrl) map.set(d.path, d.signedUrl);
+  const paths = rows.filter((r) => !r.video_deleted_at).map((r) => r.storage_path);
+  for (let i = 0; i < paths.length; i += 500) {
+    const { data } = await db().storage.from(FARM.videoBucket).createSignedUrls(paths.slice(i, i + 500), expiresSeconds);
+    for (const d of data ?? []) if (d.path && d.signedUrl && !d.error) map.set(d.path, d.signedUrl);
+  }
   return map;
+}
+
+/** Number of uploaded videos per batch (exact counts, not limited to 1,000). */
+export async function videoCountsByBatch(batchIds: string[]): Promise<Map<string, number>> {
+  const counts = await Promise.all(
+    batchIds.map(async (id) => {
+      const { count } = await db().from("recordings").select("id", { count: "exact", head: true }).eq("status", "uploaded").eq("batch_id", id);
+      return [id, count ?? 0] as const;
+    }),
+  );
+  return new Map(counts);
 }
 
 export function toInputs(rows: RecordingRow[], urls?: Map<string, string>): RecordingInput[] {
@@ -89,12 +113,13 @@ export function toInputs(rows: RecordingRow[], urls?: Map<string, string>): Reco
     recordedAt: r.recorded_at,
     flags: r.flags ?? [],
     videoUrl: urls?.get(r.storage_path) ?? null,
+    durationSeconds: r.duration_seconds == null ? null : Number(r.duration_seconds),
   }));
 }
 
 export async function buildBatchReport(from: string, to: string, batch: Batch, withVideos = false) {
   const [rows, staff, schedules] = await Promise.all([fetchRecordings(from, to, batch.id), fetchStaff(), fetchSchedules()]);
-  const urls = withVideos ? await signedVideoUrls(rows.map((r) => r.storage_path), 7 * 86_400) : undefined;
+  const urls = withVideos ? await signedVideoUrls(rows, 7 * 86_400) : undefined;
   return computeReport({
     from,
     to,
